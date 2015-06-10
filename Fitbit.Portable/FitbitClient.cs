@@ -15,9 +15,30 @@ namespace Fitbit.Api.Portable
         public HttpClient HttpClient { get; private set; }
 
         /// <summary>
+        /// The specific implementation that'll authorize the request. Usually encapsulates adding header tokens. See OAuth2Authorization and OAuth1Authorization
+        /// </summary>
+        public IAuthorization Authorization { get; private set; }
+
+        public FitbitClient(IAuthorization authorization, HttpClient httpClient = null)
+        {
+            if (authorization == null)
+                throw new ArgumentNullException("authorization", "Authorization can not be null; please provide an Authorization instance.");
+
+            Authorization = authorization;
+
+            if (httpClient == null)
+                this.HttpClient = new HttpClient();
+            else
+                this.HttpClient = httpClient;
+
+        }
+
+
+        /// <summary>
         /// Use this constructor if an authorized httpclient has already been setup and accessing the resources is what is required.
         /// </summary>
         /// <param name="httpClient"></param>
+        [Obsolete]
         public FitbitClient(HttpClient httpClient) : this(string.Empty, string.Empty, string.Empty, string.Empty, httpClient)
         {
         }
@@ -29,6 +50,7 @@ namespace Fitbit.Api.Portable
         /// <param name="consumerSecret"></param>
         /// <param name="accessToken"></param>
         /// <param name="accessSecret"></param>
+        [Obsolete]
         public FitbitClient(string consumerKey, string consumerSecret, string accessToken, string accessSecret) : this(consumerKey, consumerSecret, accessToken, accessSecret, httpClient: null)
         {
             // note: do not remove the httpclient optional parameter above, even if resharper says you should, as otherwise it will make a cyclic constructor call .... which is bad!
@@ -42,6 +64,7 @@ namespace Fitbit.Api.Portable
         /// <param name="accessToken"></param>
         /// <param name="accessSecret"></param>
         /// <param name="httpClient"></param>
+        [Obsolete]
         private FitbitClient(string consumerKey, string consumerSecret, string accessToken, string accessSecret, HttpClient httpClient = null)
         {
             HttpClient = httpClient;
@@ -82,6 +105,8 @@ namespace Fitbit.Api.Portable
         public async Task<FitbitResponse<Activity>> GetDayActivityAsync(DateTime activityDate, string encodedUserId = null)
         {
             string apiCall = FitbitClientHelperExtensions.ToFullUrl("/1/user/{0}/activities/date/{1}.json", encodedUserId, activityDate.ToFitbitFormat());
+            Authorization.SetAuthorizationHeader(this.HttpClient);
+
 
             HttpResponseMessage response = await HttpClient.GetAsync(apiCall);
             var fitbitResponse = await HandleResponse<Activity>(response);
@@ -271,6 +296,8 @@ namespace Fitbit.Api.Portable
         {
             var apiCall = FitbitClientHelperExtensions.ToFullUrl("/1/user/{0}{1}/date/{2}/{3}.json", encodedUserId, timeSeriesResourceType.GetStringValue(), baseDate.ToFitbitFormat(), endDateOrPeriod);
 
+            Authorization.SetAuthorizationHeader(this.HttpClient);
+
             HttpResponseMessage response = await HttpClient.GetAsync(apiCall);
             var fitbitResponse = await HandleResponse<TimeSeriesDataList>(response);
             if (fitbitResponse.Success)
@@ -320,6 +347,8 @@ namespace Fitbit.Api.Portable
         {
             var apiCall = FitbitClientHelperExtensions.ToFullUrl("/1/user/{0}{1}/date/{2}/{3}.json", encodedUserId, timeSeriesResourceType.GetStringValue(), baseDate.ToFitbitFormat(), endDateOrPeriod);
 
+            Authorization.SetAuthorizationHeader(this.HttpClient);
+
             HttpResponseMessage response = await HttpClient.GetAsync(apiCall);
             var fitbitResponse = await HandleResponse<TimeSeriesDataListInt>(response);
             if (fitbitResponse.Success)
@@ -329,6 +358,44 @@ namespace Fitbit.Api.Portable
                 fitbitResponse.Data = serializer.GetTimeSeriesDataListInt(responseBody);
             }
             return fitbitResponse;
+        }
+
+        public async Task<FitbitResponse<IntradayData>> GetIntraDayTimeSeriesAsync(IntradayResourceType timeSeriesResourceType, DateTime dayAndStartTime, TimeSpan intraDayTimeSpan)
+        {
+
+            string apiCall = null;
+
+            if (intraDayTimeSpan > new TimeSpan(0, 1, 0) && //the timespan is greater than a minute
+                dayAndStartTime.Day == dayAndStartTime.Add(intraDayTimeSpan).Day //adding the timespan doesn't go in to the next day
+            )
+            {
+                apiCall = string.Format("/1/user/-{0}/date/{1}/1d/time/{2}/{3}.json",
+                                        timeSeriesResourceType.GetStringValue(),
+                                        dayAndStartTime.ToFitbitFormat(),
+                                        dayAndStartTime.ToString("HH:mm"),
+                                        dayAndStartTime.Add(intraDayTimeSpan).ToString("HH:mm"));
+            }
+            else //just get the today data, there was a date specified but the timerange was likely too large or negative
+            {
+                apiCall = string.Format("/1/user/-{0}/date/{1}/1d.json",
+                                        timeSeriesResourceType.GetStringValue(),
+                                        dayAndStartTime.ToFitbitFormat());
+            }
+
+            apiCall = FitbitClientHelperExtensions.ToFullUrl(apiCall);
+
+            HttpResponseMessage response = await HttpClient.GetAsync(apiCall);
+            var fitbitResponse = await HandleResponse<IntradayData>(response);
+            if (fitbitResponse.Success)
+            {
+                string responseBody = await response.Content.ReadAsStringAsync();
+                var serializer = new JsonDotNetSerializer { RootProperty = timeSeriesResourceType.ToTimeSeriesProperty() };
+                fitbitResponse.Data = serializer.GetIntradayTimeSeriesData(responseBody);
+            }
+            return fitbitResponse;
+
+
+
         }
 
         /// <summary>
@@ -721,6 +788,28 @@ namespace Fitbit.Api.Portable
         {
             string strValue = apiCollectionType == APICollectionType.user ? string.Empty : apiCollectionType.ToString();
             return string.IsNullOrWhiteSpace(strValue) ? strValue : string.Format(format, strValue);
+        }
+
+        /// <summary>
+        /// Pass a freeform url. Good for debuging pursposes
+        /// </summary>
+        /// <param name="date"></param>
+        /// <param name="encodedUserId"></param>
+        /// <returns></returns>
+        public async Task<string> GetAPIFreeResponse(string apiPath)
+        {
+            string apiCall = apiPath;
+
+            HttpResponseMessage response = await HttpClient.GetAsync(apiCall);
+            var fitbitResponse = await HandleResponse<Food>(response);
+            string responseBody = null;
+
+            if (fitbitResponse.Success)
+            {
+                responseBody = await response.Content.ReadAsStringAsync();
+            }
+
+            return responseBody;
         }
 
         /// <summary>
